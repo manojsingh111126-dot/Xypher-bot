@@ -1,89 +1,587 @@
-import time, random, discord
+import json
+import copy
+import math
+import os
+import random
+import time
 from typing import Optional
+
+import discord
 from discord import app_commands
-from discord.ext import commands
-import database as db
-from utils import embed, err, fmt, COIN, COINS, RED
+from discord.ext import commands, tasks
 
-def remaining(last, secs): return max(0, int(last + secs - time.time()))
-def dur(s): return f'{s // 3600}h {s % 3600 // 60}m' if s >= 3600 else f'{s // 60}m {s % 60}s' if s >= 60 else f'{s}s'
-def parse(v, maxv):
-    if v.lower() == 'all': return maxv
-    try: return int(v.replace(',', ''))
-    except ValueError: return 0
+from theme import knight_embed, RED, BLUE, DARK, safe_dm
+from moderation import fail
 
+DATA_FILE = "economy.json"
+
+EMOJI = "🪙"
+START_COINS = 500
+MIN_BET = 10
+MAX_BET = 100_000
+
+DAILY_BASE, DAILY_STEP, DAILY_MAX_STREAK = 250, 25, 30
+WEEKLY_AMOUNT = 2000
+WORK_RANGE = (80, 220)
+COOLDOWNS = {"daily": 86400, "weekly": 604800, "work": 3600, "rob": 3600}
+
+JOBS = [
+    "delivered scrolls across the kingdom 📜",
+    "stopped a runaway war-wagon 🐎",
+    "painted a royal portrait 🖼️",
+    "rescued a kitten from a tower 🐈",
+    "sharpened swords at the armory 🔧",
+    "trained a young squire 🤺",
+    "polished the castle's battlements 🏰",
+    "caught a thief mid-flight 🗡️",
+]
+
+# built-in shop items (every server gets these; admins can add role items)
+ITEMS = {
+    "lock":    {"name": "Iron Lock", "emoji": "🔒", "price": 600, "kind": "consumable",
+                "desc": "Passive: blocks the next /treasury plunder against you."},
+    "lucky":   {"name": "Lucky Charm", "emoji": "🍀", "price": 2000, "kind": "consumable",
+                "desc": "Use it: your next casino win pays +25% extra."},
+    "booster": {"name": "War Horn", "emoji": "⚡", "price": 1500, "kind": "consumable",
+                "desc": "Use it: your next /daily, /treasury weekly or /work pays double."},
+    "mask":    {"name": "Knight's Helm", "emoji": "🪖", "price": 15_000, "kind": "collectible",
+                "desc": "A collectible to show off."},
+    "trophy":  {"name": "Golden Grail", "emoji": "🏆", "price": 75_000, "kind": "collectible",
+                "desc": "Pure bragging rights."},
+    "crown":   {"name": "Royal Crown", "emoji": "👑", "price": 250_000, "kind": "collectible",
+                "desc": "For the richest knight in the realm."},
+}
+
+
+# ------------------------------------------------------------------ pure helpers
+def parse_amount(text: str, available: int) -> Optional[int]:
+    """'500', '2k', '1.5m', 'half', 'all' -> int (or None if invalid)."""
+    t = text.strip().lower().replace(",", "").replace("_", "")
+    if t == "all":
+        return available
+    if t == "half":
+        return available // 2
+    mult = 1
+    if t.endswith("k"):
+        mult, t = 1_000, t[:-1]
+    elif t.endswith("m"):
+        mult, t = 1_000_000, t[:-1]
+    try:
+        val = float(t)
+    except ValueError:
+        return None
+    if not math.isfinite(val) or val <= 0:
+        return None
+    return int(val * mult)
+
+
+def new_user() -> dict:
+    return {
+        "coins": START_COINS, "bank": 0,
+        "daily": 0.0, "streak": 0, "weekly": 0.0, "work": 0.0, "rob": 0.0,
+        "inv": {}, "buffs": {},
+        "stats": {"won": 0, "lost": 0, "games": 0},
+    }
+
+
+# ------------------------------------------------------------------ cog
 class Economy(commands.Cog):
-    def __init__(self, bot): self.bot = bot
+    ecoadmin = app_commands.Group(
+        name="ecoadmin", description="Bot owner only: manage the realm economy", guild_only=True)
+    treasury = app_commands.Group(
+        name="treasury", description="More treasury commands: weekly, deposit, withdraw, plunder, use",
+        guild_only=True)
 
-    @app_commands.command(name='balance', description=f'Check your {COINS}')
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.data = {"guilds": {}}
+        self.dirty = False
+        loaded = {}
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    self.data.update(loaded)
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        # One-time migration: old versions stored each member inside each guild.
+        # Keep the complete account with the highest net worth (wallet + bank).
+        if isinstance(loaded, dict) and isinstance(loaded.get("users"), dict):
+            self.data["users"] = loaded["users"]
+        else:
+            self.data["users"] = self._migrate_global_users()
+            self.dirty = True
+        self.data.setdefault("guilds", {})
+        self.save_loop.start()
+
+    def cog_unload(self):
+        self.save_loop.cancel()
+        self.save()
+
+    # ---------- storage
+    def save(self):
+        tmp = DATA_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, indent=2)
+        os.replace(tmp, DATA_FILE)
+        self.dirty = False
+
+    @tasks.loop(seconds=10)
+    async def save_loop(self):
+        if self.dirty:
+            self.save()
+
+    @save_loop.before_loop
+    async def _wait(self):
+        await self.bot.wait_until_ready()
+
+    def _migrate_global_users(self) -> dict:
+        """Choose each member's highest-value legacy account across all guilds."""
+        chosen = {}
+        for guild_data in self.data.get("guilds", {}).values():
+            if not isinstance(guild_data, dict):
+                continue
+            users = guild_data.get("users", {})
+            if not isinstance(users, dict):
+                continue
+            for uid, account in users.items():
+                if not isinstance(account, dict):
+                    continue
+                try:
+                    value = int(account.get("coins", START_COINS)) + int(account.get("bank", 0))
+                    wallet = int(account.get("coins", START_COINS))
+                except (TypeError, ValueError):
+                    value, wallet = START_COINS, START_COINS
+                current = chosen.get(str(uid))
+                # Prefer the largest wallet balance; break ties by net worth.
+                if current is None or (wallet, value) > (current[1], current[0]):
+                    chosen[str(uid)] = (value, wallet, copy.deepcopy(account))
+
+        users = {}
+        defaults = new_user()
+        for uid, (_, __, account) in chosen.items():
+            for key, value in defaults.items():
+                account.setdefault(key, copy.deepcopy(value))
+            if not isinstance(account.get("stats"), dict):
+                account["stats"] = copy.deepcopy(defaults["stats"])
+            else:
+                for key, value in defaults["stats"].items():
+                    account["stats"].setdefault(key, value)
+            users[uid] = account
+        return users
+
+    def _guild(self, gid: int) -> dict:
+        # Shop configuration remains server-specific; balances do not.
+        g = self.data["guilds"].setdefault(str(gid), {})
+        g.setdefault("users", {})  # retained only for legacy data compatibility
+        g.setdefault("shop", {})
+        return g
+
+    # ---------- API used by the casino cog
+    def user(self, gid: int, uid: int) -> dict:
+        # gid is retained in the API for compatibility with existing commands/casino.py.
+        users = self.data.setdefault("users", {})
+        u = users.setdefault(str(uid), new_user())
+        for k, v in new_user().items():       # fill any missing keys
+            u.setdefault(k, v)
+        return u
+
+    def wallet(self, gid: int, uid: int) -> int:
+        return self.user(gid, uid)["coins"]
+
+    def add(self, gid: int, uid: int, amount: int):
+        u = self.user(gid, uid)
+        u["coins"] = max(0, u["coins"] + amount)
+        self.dirty = True
+
+    def take(self, gid: int, uid: int, amount: int) -> bool:
+        u = self.user(gid, uid)
+        if amount <= 0 or u["coins"] < amount:
+            return False
+        u["coins"] -= amount
+        self.dirty = True
+        return True
+
+    def mark(self, gid: int, uid: int, profit: int):
+        s = self.user(gid, uid)["stats"]
+        s["games"] += 1
+        if profit > 0:
+            s["won"] += profit
+        elif profit < 0:
+            s["lost"] += -profit
+        self.dirty = True
+
+    def lucky_bonus(self, gid: int, uid: int, profit: int):
+        """Consume a Lucky Charm (if active) on a winning payout."""
+        u = self.user(gid, uid)
+        if profit > 0 and u["buffs"].pop("lucky", None):
+            self.dirty = True
+            bonus = max(1, profit // 4)
+            return profit + bonus, f"\n🍀 Lucky Charm added **+{bonus:,}** Xycoins!"
+        return profit, ""
+
+    def _boost(self, u: dict, amount: int):
+        if u["buffs"].pop("booster", None):
+            self.dirty = True
+            return amount * 2, "\n⚡ War Horn doubled it!"
+        return amount, ""
+
+    def items(self, gid: int) -> dict:
+        merged = dict(ITEMS)
+        merged.update(self._guild(gid)["shop"])
+        return merged
+
+    def net_worth(self, u: dict) -> int:
+        return u["coins"] + u["bank"]
+
+    # ---------- small helpers
+    @staticmethod
+    def _wait_msg(last: float, cd: int) -> Optional[int]:
+        ready = last + cd
+        return int(ready) if ready > time.time() else None
+
+    async def item_autocomplete(self, interaction: discord.Interaction, current: str):
+        out = []
+        for key, it in self.items(interaction.guild.id).items():
+            label = f"{it['emoji']} {it['name']} — {it['price']:,} Xycoins"
+            if current.lower() in label.lower() or current.lower() in key:
+                out.append(app_commands.Choice(name=label[:100], value=key))
+        return out[:25]
+
+    # ================================================================ BASICS
+    @app_commands.command(name="balance", description="Check your Xycoins")
+    @app_commands.describe(member="Whose balance? (defaults to you)")
     @app_commands.guild_only()
-    async def balance(self, i: discord.Interaction, user: Optional[discord.User] = None):
-        u = user or i.user; d = db.get_user(i.guild.id, u.id)
-        await i.response.send_message(embed=embed(f"{COIN} {u.display_name}'s Treasury",
-            f"**Wallet:** {fmt(d['wallet'])} {COINS}\n**Bank:** {fmt(d['bank'])} {COINS}\n**Net worth:** {fmt(d['wallet'] + d['bank'])} {COINS}"))
+    async def balance(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
+        member = member or interaction.user
+        if member.bot:
+            return await fail(interaction, "Bots don't have Xycoins. ⚔️")
+        gid = interaction.guild.id
+        u = self.user(gid, member.id)
+        board = sorted(self.data["users"].items(), key=lambda kv: self.net_worth(kv[1]), reverse=True)
+        pos = next((i for i, (uid, _) in enumerate(board, 1) if uid == str(member.id)), 0)
+        s = u["stats"]
+        desc = (f"{EMOJI} **Wallet:** {u['coins']:,}\n🏦 **Bank:** {u['bank']:,}\n"
+                f"💎 **Net worth:** {self.net_worth(u):,}  (rank **#{pos}**)\n\n"
+                f"🎰 **Games played:** {s['games']:,}\n"
+                f"📈 **Won:** {s['won']:,}  •  📉 **Lost:** {s['lost']:,}")
+        if u["buffs"]:
+            desc += "\n✨ **Active:** " + ", ".join(f"{ITEMS[k]['emoji']} {ITEMS[k]['name']}" for k in u["buffs"] if k in ITEMS)
+        embed = knight_embed(f"{member.display_name}'s Treasury", desc, BLUE)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name='daily', description='Claim your daily royal stipend')
+    @app_commands.command(name="daily", description="Claim your daily Xycoins (streaks give bonuses!)")
     @app_commands.guild_only()
-    async def daily(self, i: discord.Interaction):
-        d = db.get_user(i.guild.id, i.user.id); w = remaining(d['daily'], 86400)
-        if w: return await err(i, f'The treasurer says return in **{dur(w)}**.')
-        g = random.randint(400, 700)
-        db.add_coins(i.guild.id, i.user.id, g)
-        db.run('UPDATE users SET daily=? WHERE guild=? AND user=?', (time.time(), str(i.guild.id), str(i.user.id)))
-        await i.response.send_message(embed=embed('👑 Royal Stipend', f'The crown grants you **{g} {COINS}**!'))
+    async def daily(self, interaction: discord.Interaction):
+        gid, uid, now = interaction.guild.id, interaction.user.id, time.time()
+        u = self.user(gid, uid)
+        ready = self._wait_msg(u["daily"], COOLDOWNS["daily"])
+        if ready:
+            return await fail(interaction, f"Your daily tribute is still being counted! Come back <t:{ready}:R>. 🛡️")
+        streak = u["streak"] + 1 if u["daily"] and now - u["daily"] <= 172800 else 1
+        amount = DAILY_BASE + DAILY_STEP * min(streak, DAILY_MAX_STREAK)
+        amount, note = self._boost(u, amount)
+        u.update(daily=now, streak=streak)
+        u["coins"] += amount
+        self.dirty = True
+        await interaction.response.send_message(embed=knight_embed(
+            "Daily Tribute!", f"You collected **{amount:,}** Xycoins {EMOJI}\n🔥 **Streak:** {streak} day(s) "
+                           f"(max bonus at {DAILY_MAX_STREAK}){note}\n💰 **Wallet:** {u['coins']:,}", BLUE))
 
-    @app_commands.command(name='work', description='Take a job around the castle')
+    @app_commands.command(name="work", description="Take a knightly job for some Xycoins (once an hour)")
     @app_commands.guild_only()
-    async def work(self, i: discord.Interaction):
-        d = db.get_user(i.guild.id, i.user.id); w = remaining(d['work'], 3600)
-        if w: return await err(i, f'You are weary. Rest for **{dur(w)}**.')
-        job = random.choice(['polished the armory', 'guarded the drawbridge', 'forged a sword', 'escorted a merchant', 'slew a goblin', 'tended the royal horses'])
-        g = random.randint(60, 220)
-        db.add_coins(i.guild.id, i.user.id, g)
-        db.run('UPDATE users SET work=? WHERE guild=? AND user=?', (time.time(), str(i.guild.id), str(i.user.id)))
-        await i.response.send_message(embed=embed('🔨 Honest Work', f'You {job} and earned **{g} {COINS}**.'))
+    async def work(self, interaction: discord.Interaction):
+        gid, uid = interaction.guild.id, interaction.user.id
+        u = self.user(gid, uid)
+        ready = self._wait_msg(u["work"], COOLDOWNS["work"])
+        if ready:
+            return await fail(interaction, f"You're tired from your last job. Rest until <t:{ready}:R>. ⚔️")
+        amount, note = self._boost(u, random.randint(*WORK_RANGE))
+        u["work"] = time.time()
+        u["coins"] += amount
+        self.dirty = True
+        await interaction.response.send_message(embed=knight_embed(
+            "Hard Day's Work!", f"You {random.choice(JOBS)} and earned **{amount:,}** Xycoins {EMOJI}{note}\n"
+                                f"💰 **Wallet:** {u['coins']:,}", BLUE))
 
-    @app_commands.command(name='deposit', description='Store coins in the vault')
+    @app_commands.command(name="give", description="Give some of your Xycoins to a friend")
+    @app_commands.describe(member="Who gets the Xycoins?", amount="Amount (e.g. 500, 2k, half, all)")
     @app_commands.guild_only()
-    async def deposit(self, i: discord.Interaction, amount: str):
-        d = db.get_user(i.guild.id, i.user.id); n = parse(amount, d['wallet'])
-        if n < 1 or n > d['wallet']: return await err(i, 'Invalid amount.')
-        db.run('UPDATE users SET wallet=wallet-?, bank=bank+? WHERE guild=? AND user=?', (n, n, str(i.guild.id), str(i.user.id)))
-        await i.response.send_message(embed=embed('🏦 Deposited', f'**{fmt(n)} {COINS}** locked in the vault.'))
+    async def give(self, interaction: discord.Interaction, member: discord.Member, amount: str):
+        gid = interaction.guild.id
+        if member.bot or member.id == interaction.user.id:
+            return await fail(interaction, "Pick a different human to give Xycoins to. ⚔️")
+        value = parse_amount(amount, self.wallet(gid, interaction.user.id))
+        if not value:
+            return await fail(interaction, "Enter a valid amount like `500`, `2k`, `half` or `all`.")
+        if not self.take(gid, interaction.user.id, value):
+            return await fail(interaction, "You don't have that many Xycoins in your wallet. 🛡️")
+        self.add(gid, member.id, value)
+        await interaction.response.send_message(embed=knight_embed(
+            "Tribute Shared!", f"{interaction.user.mention} gave **{value:,}** Xycoins {EMOJI} to {member.mention}! ⚔️\n"
+                            f"💰 **Your wallet:** {self.wallet(gid, interaction.user.id):,}", BLUE))
+        await safe_dm(member, "You received Xycoins! 🛡️",
+                      f"**{interaction.user.display_name}** gave you **{value:,}** Xycoins {EMOJI}\n"
+                      f"**Server:** {interaction.guild.name}\n💰 **Your wallet:** {self.wallet(gid, member.id):,}", BLUE)
 
-    @app_commands.command(name='withdraw', description='Take coins from the vault')
+    @app_commands.command(name="richest", description="The richest knights across all Xypher realms")
     @app_commands.guild_only()
-    async def withdraw(self, i: discord.Interaction, amount: str):
-        d = db.get_user(i.guild.id, i.user.id); n = parse(amount, d['bank'])
-        if n < 1 or n > d['bank']: return await err(i, 'Invalid amount.')
-        db.run('UPDATE users SET wallet=wallet+?, bank=bank-? WHERE guild=? AND user=?', (n, n, str(i.guild.id), str(i.user.id)))
-        await i.response.send_message(embed=embed('💰 Withdrawn', f'**{fmt(n)} {COINS}** moved to your wallet.'))
+    async def richest(self, interaction: discord.Interaction):
+        board = sorted(self.data["users"].items(),
+                       key=lambda kv: self.net_worth(kv[1]), reverse=True)[:10]
+        medals = ["🥇", "🥈", "🥉"]
+        lines = [f"{medals[i] if i < 3 else f'**{i + 1}.**'} <@{uid}> — **{self.net_worth(u):,}** Xycoins"
+                 for i, (uid, u) in enumerate(board)]
+        await interaction.response.send_message(embed=knight_embed(
+            "Richest Across the Realm", "\n".join(lines) or "Nobody has Xycoins yet. 🛡️", BLUE))
 
-    @app_commands.command(name='pay', description=f'Give {COINS} to another knight')
+    # ================================================================ /treasury ...
+    @treasury.command(name="weekly", description="Claim your weekly Xycoins")
+    async def weekly(self, interaction: discord.Interaction):
+        gid, uid = interaction.guild.id, interaction.user.id
+        u = self.user(gid, uid)
+        ready = self._wait_msg(u["weekly"], COOLDOWNS["weekly"])
+        if ready:
+            return await fail(interaction, f"Your weekly tribute isn't ready yet. Come back <t:{ready}:R>. 🛡️")
+        amount, note = self._boost(u, WEEKLY_AMOUNT)
+        u["weekly"] = time.time()
+        u["coins"] += amount
+        self.dirty = True
+        await interaction.response.send_message(embed=knight_embed(
+            "Weekly Tribute!", f"You collected **{amount:,}** Xycoins {EMOJI}{note}\n💰 **Wallet:** {u['coins']:,}", BLUE))
+
+    @treasury.command(name="deposit", description="Move Xycoins into your safe bank (can't be robbed)")
+    @app_commands.describe(amount="Amount (e.g. 500, 2k, half, all)")
+    async def deposit(self, interaction: discord.Interaction, amount: str):
+        u = self.user(interaction.guild.id, interaction.user.id)
+        value = parse_amount(amount, u["coins"])
+        if not value or value > u["coins"]:
+            return await fail(interaction, "Enter a valid amount you actually have in your wallet.")
+        u["coins"] -= value
+        u["bank"] += value
+        self.dirty = True
+        await interaction.response.send_message(embed=knight_embed(
+            "Deposited!", f"🏦 Stored **{value:,}** Xycoins.\n💰 Wallet: {u['coins']:,} • 🏦 Bank: {u['bank']:,}", BLUE),
+            ephemeral=True)
+
+    @treasury.command(name="withdraw", description="Take Xycoins out of your bank")
+    @app_commands.describe(amount="Amount (e.g. 500, 2k, half, all)")
+    async def withdraw(self, interaction: discord.Interaction, amount: str):
+        u = self.user(interaction.guild.id, interaction.user.id)
+        value = parse_amount(amount, u["bank"])
+        if not value or value > u["bank"]:
+            return await fail(interaction, "Enter a valid amount you actually have in your bank.")
+        u["bank"] -= value
+        u["coins"] += value
+        self.dirty = True
+        await interaction.response.send_message(embed=knight_embed(
+            "Withdrawn!", f"💰 Took out **{value:,}** Xycoins.\n💰 Wallet: {u['coins']:,} • 🏦 Bank: {u['bank']:,}", BLUE),
+            ephemeral=True)
+
+    @treasury.command(name="plunder", description="Try to plunder Xycoins from someone's wallet (risky!)")
+    @app_commands.describe(member="Your target")
+    async def rob(self, interaction: discord.Interaction, member: discord.Member):
+        gid = interaction.guild.id
+        if member.bot or member.id == interaction.user.id:
+            return await fail(interaction, "Pick a different human to rob. ⚔️")
+        me, target = self.user(gid, interaction.user.id), self.user(gid, member.id)
+        ready = self._wait_msg(me["rob"], COOLDOWNS["rob"])
+        if ready:
+            return await fail(interaction, f"The cops are watching you. Try again <t:{ready}:R>. 🚔")
+        if me["coins"] < 200:
+            return await fail(interaction, "You need at least **200** Xycoins in your wallet to risk a robbery.")
+        if target["coins"] < 100:
+            return await fail(interaction, f"{member.display_name} has almost nothing in their wallet.")
+
+        me["rob"] = time.time()
+        self.dirty = True
+        if target["inv"].get("lock", 0) > 0:
+            target["inv"]["lock"] -= 1
+            if target["inv"]["lock"] <= 0:
+                del target["inv"]["lock"]
+            fine = min(me["coins"], max(50, me["coins"] // 10))
+            me["coins"] -= fine
+            return await interaction.response.send_message(embed=knight_embed(
+                "Blocked by a Iron Lock!", f"🔒 {member.mention}'s **Iron Lock** stopped {interaction.user.mention}!\n"
+                                          f"You dropped **{fine:,}** Xycoins while running away.", DARK))
+
+        if random.random() < 0.45:
+            stolen = max(1, int(target["coins"] * random.uniform(0.15, 0.35)))
+            stolen = min(stolen, 25_000)
+            target["coins"] -= stolen
+            me["coins"] += stolen
+            await interaction.response.send_message(embed=knight_embed(
+                "Royal Raid!", f"⚔️ {interaction.user.mention} swiped **{stolen:,}** Xycoins from {member.mention}!", RED))
+        else:
+            fine = min(me["coins"], max(100, int(me["coins"] * 0.15)))
+            me["coins"] -= fine
+            target["coins"] += fine // 2
+            await interaction.response.send_message(embed=knight_embed(
+                "Caught in the Act!", f"🚔 {interaction.user.mention} got caught robbing {member.mention} and paid "
+                                      f"**{fine:,}** Xycoins. ({member.display_name} got {fine // 2:,} as compensation.)", DARK))
+
+    @treasury.command(name="use", description="Activate a Lucky Charm or War Horn")
+    @app_commands.describe(item="Which item?")
+    @app_commands.choices(item=[app_commands.Choice(name="🍀 Lucky Charm", value="lucky"),
+                                app_commands.Choice(name="⚡ War Horn", value="booster")])
+    async def use(self, interaction: discord.Interaction, item: app_commands.Choice[str]):
+        u = self.user(interaction.guild.id, interaction.user.id)
+        key = item.value
+        if u["inv"].get(key, 0) <= 0:
+            return await fail(interaction, f"You don't own a {item.name}. Buy one with `/buy`. 🛒")
+        if key in u["buffs"]:
+            return await fail(interaction, f"{item.name} is already active!")
+        u["inv"][key] -= 1
+        if u["inv"][key] <= 0:
+            del u["inv"][key]
+        u["buffs"][key] = True
+        self.dirty = True
+        await interaction.response.send_message(embed=knight_embed(
+            "Item Activated!", f"{item.name} is now active. {ITEMS[key]['desc']}", BLUE))
+
+    # ================================================================ SHOP
+    @app_commands.command(name="shop", description="Browse the royal armory")
     @app_commands.guild_only()
-    async def pay(self, i: discord.Interaction, user: discord.Member, amount: str):
-        d = db.get_user(i.guild.id, i.user.id); n = parse(amount, d['wallet'])
-        if user.bot or user == i.user: return await err(i, 'Invalid recipient.')
-        if n < 1 or n > d['wallet']: return await err(i, 'Invalid amount or insufficient funds.')
-        db.add_coins(i.guild.id, i.user.id, -n); db.add_coins(i.guild.id, user.id, n)
-        await i.response.send_message(embed=embed('🤝 Tribute paid', f'**{i.user.display_name}** gave **{fmt(n)} {COINS}** to **{user.display_name}**.'))
+    async def shop(self, interaction: discord.Interaction):
+        groups = {"consumable": [], "collectible": [], "role": []}
+        for key, it in self.items(interaction.guild.id).items():
+            groups.setdefault(it["kind"], []).append(
+                f"{it['emoji']} **{it['name']}** — {it['price']:,} {EMOJI}\n┗ {it['desc']}")
+        embed = knight_embed("Xypher's Armory", "Buy with `/buy`. Check your stuff with `/inventory`.", BLUE)
+        for kind, label in (("consumable", "🧪 Boosts & tools"), ("collectible", "🏆 Collectibles"), ("role", "🎖️ Server roles")):
+            if groups.get(kind):
+                embed.add_field(name=label, value="\n".join(groups[kind])[:1024], inline=False)
+        await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name='gamble', description='Wager at the tavern (45% to double)')
+    @app_commands.command(name="buy", description="Buy something from the shop")
+    @app_commands.describe(item="What to buy", quantity="How many (roles are always 1)")
     @app_commands.guild_only()
-    async def gamble(self, i: discord.Interaction, amount: str):
-        d = db.get_user(i.guild.id, i.user.id); n = parse(amount, d['wallet'])
-        if n < 1 or n > d['wallet']: return await err(i, 'Invalid amount or insufficient funds.')
-        win = random.random() < 0.45
-        db.add_coins(i.guild.id, i.user.id, n if win else -n)
-        await i.response.send_message(embed=embed('🎉 Fortune smiles' if win else '💀 The tavern wins',
-            f'You won **{fmt(n)} {COINS}**!' if win else f'You lost **{fmt(n)} {COINS}**.', 0xC9A227 if win else RED))
+    async def buy(self, interaction: discord.Interaction, item: str,
+                  quantity: app_commands.Range[int, 1, 99] = 1):
+        gid, uid = interaction.guild.id, interaction.user.id
+        it = self.items(gid).get(item)
+        if not it:
+            return await fail(interaction, "That item isn't in the shop. Pick one from the autocomplete list.")
+        if it["kind"] == "role":
+            quantity = 1
+            role = interaction.guild.get_role(it["role_id"])
+            if role is None:
+                return await fail(interaction, "That role no longer exists.")
+            if role in interaction.user.roles:
+                return await fail(interaction, "You already have that role!")
+            if role >= interaction.guild.me.top_role:
+                return await fail(interaction, "That role is above mine, so I can't hand it out. Tell an admin.")
+        total = it["price"] * quantity
+        if not self.take(gid, uid, total):
+            return await fail(interaction, f"You need **{total:,}** Xycoins but only have **{self.wallet(gid, uid):,}**.")
+        if it["kind"] == "role":
+            try:
+                await interaction.user.add_roles(role, reason="Bought in the Xypher armory")
+            except discord.HTTPException:
+                self.add(gid, uid, total)
+                return await fail(interaction, "I couldn't give you that role, so you were refunded.")
+        else:
+            inv = self.user(gid, uid)["inv"]
+            inv[item] = inv.get(item, 0) + quantity
+            self.dirty = True
+        await interaction.response.send_message(embed=knight_embed(
+            "Purchase Complete!", f"You bought **{quantity}× {it['emoji']} {it['name']}** for **{total:,}** Xycoins.\n"
+                                  f"💰 **Wallet:** {self.wallet(gid, uid):,}", BLUE))
 
-    @app_commands.command(name='leaderboard', description='Richest knights in the realm')
+    @buy.autocomplete("item")
+    async def buy_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.item_autocomplete(interaction, current)
+
+    @app_commands.command(name="inventory", description="See what you own")
+    @app_commands.describe(member="Whose inventory? (defaults to you)")
     @app_commands.guild_only()
-    async def leaderboard(self, i: discord.Interaction):
-        rows = db.many('SELECT user, wallet+bank t FROM users WHERE guild=? ORDER BY t DESC LIMIT 10', (str(i.guild.id),))
-        medals = ['🥇', '🥈', '🥉']
-        text = '\n'.join(f"{medals[n] if n < 3 else f'**{n + 1}.**'} <@{r['user']}> — {fmt(r['t'])} {COINS}" for n, r in enumerate(rows))
-        await i.response.send_message(embed=embed('🏆 Hall of Fortune', text or 'No fortunes yet. Use `/daily`!'))
+    async def inventory(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
+        member = member or interaction.user
+        gid = interaction.guild.id
+        u = self.user(gid, member.id)
+        items = self.items(gid)
+        lines = [f"{items[k]['emoji']} **{items[k]['name']}** × {q}" for k, q in u["inv"].items() if k in items]
+        embed = knight_embed(f"{member.display_name}'s Inventory", "\n".join(lines) or "Empty. Visit the `/shop`! 🛒", BLUE)
+        if u["buffs"]:
+            embed.add_field(name="✨ Active boosts",
+                            value=", ".join(f"{ITEMS[k]['emoji']} {ITEMS[k]['name']}" for k in u["buffs"] if k in ITEMS))
+        await interaction.response.send_message(embed=embed)
 
-async def setup(bot): await bot.add_cog(Economy(bot))
+    # ================================================================ ADMIN
+    async def _owner_only(self, interaction: discord.Interaction) -> bool:
+        """Xycoins are shared across every server, so only Xypher's creator may print or delete them."""
+        if await self.bot.is_owner(interaction.user):
+            return True
+        await fail(interaction, "`/ecoadmin` is only for Xypher's creator. "
+                                "This keeps the economy fair for everyone. ⚔️")
+        return False
+
+    @ecoadmin.command(name="give", description="Bot owner only: give Xycoins to a member")
+    async def admin_give(self, interaction: discord.Interaction, member: discord.Member,
+                         amount: app_commands.Range[int, 1, 100_000_000]):
+        if not await self._owner_only(interaction):
+            return
+        self.add(interaction.guild.id, member.id, amount)
+        await interaction.response.send_message(embed=knight_embed(
+            "Xycoins Given!", f"Gave **{amount:,}** Xycoins to {member.mention}.", BLUE))
+        await safe_dm(member, "You received Xycoins! 🛡️",
+                      f"You were given **{amount:,}** Xycoins {EMOJI}\n**Server:** {interaction.guild.name}", BLUE)
+
+    @ecoadmin.command(name="take", description="Bot owner only: take Xycoins from a member")
+    async def admin_take(self, interaction: discord.Interaction, member: discord.Member,
+                         amount: app_commands.Range[int, 1, 100_000_000]):
+        if not await self._owner_only(interaction):
+            return
+        self.add(interaction.guild.id, member.id, -amount)
+        await interaction.response.send_message(embed=knight_embed(
+            "Xycoins Taken!", f"Took up to **{amount:,}** Xycoins from {member.mention}.", DARK))
+        await safe_dm(member, "Xycoins were taken 🛡️",
+                      f"Up to **{amount:,}** Xycoins were taken from you.\n**Server:** {interaction.guild.name}", DARK)
+
+    @ecoadmin.command(name="reset", description="Bot owner only: reset a member's economy data")
+    async def admin_reset(self, interaction: discord.Interaction, member: discord.Member):
+        if not await self._owner_only(interaction):
+            return
+        self.data.setdefault("users", {}).pop(str(member.id), None)
+        self.dirty = True
+        await interaction.response.send_message(embed=knight_embed(
+            "Reset!", f"{member.mention}'s economy data was wiped.", DARK))
+
+    @ecoadmin.command(name="addrole", description="Bot owner only: sell a role in the shop")
+    @app_commands.describe(role="Role to sell", price="Price in Xycoins", description="Short description")
+    async def admin_addrole(self, interaction: discord.Interaction, role: discord.Role,
+                            price: app_commands.Range[int, 1, 100_000_000], description: Optional[str] = None):
+        if not await self._owner_only(interaction):
+            return
+        if role.managed or role.is_default():
+            return await fail(interaction, "I can't hand out that role.")
+        if role >= interaction.guild.me.top_role:
+            return await fail(interaction, "That role is above mine. Move my role higher in Server Settings → Roles.")
+        self._guild(interaction.guild.id)["shop"][f"role_{role.id}"] = {
+            "name": role.name, "emoji": "🎖️", "price": price, "kind": "role", "role_id": role.id,
+            "desc": (description or f"Unlocks the {role.name} role.")[:100],
+        }
+        self.dirty = True
+        await interaction.response.send_message(embed=knight_embed(
+            "Role Added to Shop!", f"{role.mention} now costs **{price:,}** Xycoins.", BLUE))
+
+    @ecoadmin.command(name="removeitem", description="Bot owner only: remove a role from the shop")
+    async def admin_removeitem(self, interaction: discord.Interaction, item: str):
+        if not await self._owner_only(interaction):
+            return
+        if self._guild(interaction.guild.id)["shop"].pop(item, None) is None:
+            return await fail(interaction, "That's not a custom shop item (built-in items can't be removed).")
+        self.dirty = True
+        await interaction.response.send_message(embed=knight_embed("Item Removed!", "It's gone from the shop. 🛡️", DARK))
+
+    @admin_removeitem.autocomplete("item")
+    async def removeitem_autocomplete(self, interaction: discord.Interaction, current: str):
+        custom = self._guild(interaction.guild.id)["shop"]
+        return [c for c in await self.item_autocomplete(interaction, current) if c.value in custom]
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Economy(bot))
