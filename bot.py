@@ -77,6 +77,10 @@ async def on_ready():
 
 
 # ---------- COMMANDS ----------
+# Discord allows only 100 top-level slash commands per bot, so the knight commands live in ONE group: /knight lore|charge|joust|dub
+knight = app_commands.Group(name="knight", description="Knightly fun: lore, charge, joust, dub")
+tree.add_command(knight)
+
 @tree.command(name="ping", description="Check how fast the royal messenger rides")
 async def ping(interaction: discord.Interaction):
     ms = round(client.latency * 1000)
@@ -85,14 +89,14 @@ async def ping(interaction: discord.Interaction):
     )
 
 
-@tree.command(name="lore", description="Hear a piece of knightly lore")
+@knight.command(name="lore", description="Hear a piece of knightly lore")
 async def lore(interaction: discord.Interaction):
     await interaction.response.send_message(
         embed=knight_embed("Knightly Lore", random.choice(KNIGHT_LORE), DARK)
     )
 
 
-@tree.command(name="charge", description="Charge into battle alongside someone")
+@knight.command(name="charge", description="Charge into battle alongside someone")
 @app_commands.describe(user="Who do you want to charge with?")
 async def charge(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(
@@ -103,7 +107,7 @@ async def charge(interaction: discord.Interaction, user: discord.Member):
     )
 
 
-@tree.command(name="joust", description="Challenge a knight to a joust")
+@knight.command(name="joust", description="Challenge a knight to a joust")
 @app_commands.describe(opponent="Who do you want to joust?")
 async def joust(interaction: discord.Interaction, opponent: discord.Member):
     if opponent.bot or opponent.id == interaction.user.id:
@@ -120,7 +124,7 @@ async def joust(interaction: discord.Interaction, opponent: discord.Member):
     )
 
 
-@tree.command(name="dub", description="Knight someone with a legendary title")
+@knight.command(name="dub", description="Knight someone with a legendary title")
 @app_commands.describe(user="Who deserves to be knighted?")
 async def dub(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(
