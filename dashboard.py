@@ -172,67 +172,52 @@ def castle_uri():
     return 'data:image/svg+xml;utf8,' + quote(svg)
 
 CSS = r"""
-/* Local font stack: no external font request on first paint. */
-html,body{background:#0e1014}
-body,.q-field,.q-btn,.q-tab{font-family:Georgia,'Trebuchet MS',sans-serif;font-size:16px}
-body::before{content:"";position:fixed;inset:0;z-index:-2;
- background:radial-gradient(ellipse at 50% -10%,rgba(201,162,39,.18),transparent 55%),radial-gradient(circle at 12% 88%,rgba(166,61,52,.14),transparent 40%),
- linear-gradient(180deg,#0e1014,#171b22 60%,#1d222b)}
-body::after{content:"";position:fixed;left:0;right:0;bottom:0;height:42vh;z-index:-1;pointer-events:none;opacity:.5;
- background:url("__CASTLE__") bottom center/cover no-repeat}
-.q-layout,.q-page-container,.q-page{background:transparent!important}
-.xy-brand{font-family:Georgia,'Times New Roman',serif;font-weight:900;letter-spacing:.2em;color:#c9a227;font-size:21px}
-.xy-h{font-family:Georgia,'Times New Roman',serif;font-weight:700;color:#efe6cc;letter-spacing:.03em}
-.xy-dim{color:#9aa1ab}
-.xy-num{font-family:Georgia,'Times New Roman',serif;font-size:28px;font-weight:700;color:#c9a227;line-height:1.1}
-.xy-card{background:rgba(22,26,33,.88)!important;border:1px solid #3b434e;border-top:2px solid #8f7418;border-radius:6px!important;
- box-shadow:0 8px 28px rgba(0,0,0,.5)!important;backdrop-filter:blur(6px)}
-.xy-header{background:rgba(12,14,18,.93)!important;border-bottom:1px solid #8f7418;backdrop-filter:blur(8px)}
-.xy-drawer{background:rgba(15,17,22,.95)!important}
-.q-btn.bg-primary{color:#1a1405!important;font-weight:700}
-.q-tab{font-family:Georgia,'Times New Roman',serif;letter-spacing:.04em}
-.q-tab--active{color:#c9a227}
-.xy-preview{background:#12151a;border:1px solid #3b434e;border-left:4px solid #c9a227;padding:12px 14px;border-radius:4px;white-space:pre-wrap}
-.xy-transcript{background:#0f1217;border:1px solid #2f363f;border-radius:4px;padding:10px;font-family:monospace;font-size:13px}
-.xy-gate{box-shadow:0 0 0 6px #0e1014,0 0 0 8px #4a525e,0 0 50px rgba(201,162,39,.25)!important;border:2px solid #8f7418!important}
-.xy-crest{font-size:64px;line-height:1;filter:drop-shadow(0 0 14px rgba(201,162,39,.6));animation:pulse 3s ease-in-out infinite}
-@keyframes pulse{50%{transform:scale(1.06)}}
-.xy-loader{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
- background:radial-gradient(ellipse at center,#232936 0%,#0c0e12 75%);transition:opacity .45s}
-.xy-loader.out{opacity:0}
-.xy-track{position:relative;width:min(440px,82vw);height:92px;overflow:hidden;border-bottom:3px solid #4a525e}
-.xy-knight{position:absolute;bottom:0;font-size:68px;line-height:1;color:#c9a227;filter:drop-shadow(0 0 12px rgba(201,162,39,.55));
- animation:gallop 2.4s linear infinite,bob .32s ease-in-out infinite}
-@keyframes gallop{from{left:-90px}to{left:100%}}
-@keyframes bob{0%,100%{transform:scaleX(-1) translateY(0)}50%{transform:scaleX(-1) translateY(-9px) rotate(5deg)}}
-.xy-sword{font-size:34px;animation:swing 1.2s ease-in-out infinite;transform-origin:50% 90%}
-@keyframes swing{0%,100%{transform:rotate(-20deg)}50%{transform:rotate(20deg)}}
-.xy-bar{width:min(320px,70vw);height:6px;background:#2a303a;border-radius:3px;overflow:hidden}
-.xy-bar i{display:block;height:100%;width:40%;background:linear-gradient(90deg,transparent,#c9a227,transparent);animation:slide 1.3s ease-in-out infinite}
+:root{--night:#090d16;--panel:#111a29;--gold:#d6ad52;--gold2:#f0d58c;--muted:#8291a8;--line:rgba(180,195,218,.13)}
+html,body{background:var(--night)!important;color:#e9eef7}
+body,.q-field,.q-btn,.q-tab{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+body:before{content:"";position:fixed;inset:0;z-index:-2;background:radial-gradient(ellipse at 72% -12%,rgba(214,173,82,.16),transparent 34%),radial-gradient(ellipse at 0% 75%,rgba(47,82,132,.16),transparent 45%),linear-gradient(145deg,#080c14,#0d1523 55%,#080d17)}
+body:after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.12;background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:34px 34px}
+.q-layout,.q-page-container,.q-page{background:transparent!important}.q-page-container{padding-left:0!important}
+.xy-brand{font-family:Georgia,'Times New Roman',serif;font-weight:800;letter-spacing:.19em;color:var(--gold2);font-size:18px}
+.xy-h{font-family:Georgia,'Times New Roman',serif;font-weight:700;color:#f3f0e8}
+.xy-dim{color:var(--muted)!important}.xy-num{font-family:Georgia,serif;font-size:30px;font-weight:700;color:var(--gold2);line-height:1.05}
+.xy-card{background:linear-gradient(145deg,rgba(23,35,55,.97),rgba(14,23,37,.97))!important;border:1px solid var(--line)!important;border-radius:16px!important;box-shadow:0 16px 42px rgba(0,0,0,.24)!important;backdrop-filter:blur(12px);padding:18px!important;transition:transform .2s,border-color .2s,box-shadow .2s}
+.xy-card:hover{transform:translateY(-3px);border-color:rgba(214,173,82,.42)!important;box-shadow:0 22px 48px rgba(0,0,0,.34)!important}
+.xy-header{background:rgba(8,13,23,.88)!important;border-bottom:1px solid var(--line);backdrop-filter:blur(18px);height:72px;padding:0 28px!important}
+.xy-drawer{background:linear-gradient(180deg,#0c1422,#0a101b)!important;border-right:1px solid var(--line)!important;width:250px!important;padding:20px 14px!important}
+.xy-drawer .q-btn{min-height:43px;border-radius:10px;text-align:left;color:#aebbd0!important;margin:3px 0}
+.xy-drawer .q-btn:hover{background:rgba(214,173,82,.09)!important;color:var(--gold2)!important}
+.xy-drawer .q-btn.text-primary,.xy-drawer .text-primary{color:var(--gold2)!important}
+.xy-section-label{font-size:10px;letter-spacing:.19em;text-transform:uppercase;color:#66768f;padding:18px 10px 6px}
+.xy-hero{position:relative;overflow:hidden;border:1px solid rgba(214,173,82,.25);border-radius:22px;padding:30px!important;background:radial-gradient(ellipse at 86% 25%,rgba(214,173,82,.19),transparent 36%),linear-gradient(115deg,#17243a,#101b2d 54%,#171c28)!important;min-height:188px}
+.xy-hero:after{content:"♜";position:absolute;right:7%;top:-46px;font-size:220px;line-height:1;color:rgba(214,173,82,.08);font-family:Georgia,serif;pointer-events:none}
+.xy-hero-kicker{font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--gold);font-weight:700}
+.xy-hero-title{font-family:Georgia,'Times New Roman',serif;font-size:clamp(26px,4vw,38px);font-weight:700;color:#fff5dc;line-height:1.12}
+.xy-hero-copy{max-width:570px;color:#aebbd0;line-height:1.6}
+.xy-server-card{min-height:166px;display:flex;flex-direction:column;justify-content:space-between}
+.xy-server-card .q-avatar{border:1px solid rgba(214,173,82,.35);box-shadow:0 5px 18px rgba(0,0,0,.25)}
+.xy-pill{border:1px solid rgba(214,173,82,.3);border-radius:999px;padding:5px 10px;color:var(--gold2);font-size:11px;letter-spacing:.04em;background:rgba(214,173,82,.08)}
+.xy-page-title{font-family:Georgia,'Times New Roman',serif;font-size:28px;color:#f2ead7;font-weight:700}
+.xy-page-sub{color:#8291a8;font-size:13px}
+.q-tab{font-weight:600;color:#8291a8;min-height:46px;padding:0 16px}.q-tab--active{color:var(--gold2)!important}.q-tabs__content{border-bottom:1px solid var(--line)}
+.q-tab-panels{border-radius:14px}.q-field--outlined .q-field__control:before{border-color:#34445b}.q-field--outlined.q-field--focused .q-field__control:after{border-color:var(--gold)}
+.q-field__label{color:#93a1b6!important}.q-btn{border-radius:10px;font-weight:650}.q-btn.bg-primary{color:#17130a!important}.q-btn--outline{border-color:rgba(214,173,82,.42)!important}
+.xy-preview{background:#0b1320;border:1px solid var(--line);border-left:3px solid var(--gold);padding:14px 16px;border-radius:10px;white-space:pre-wrap}
+.xy-transcript{background:#0b1320;border:1px solid var(--line);border-radius:10px;padding:12px;font-family:ui-monospace,monospace;font-size:13px}
+.xy-gate{border:1px solid rgba(214,173,82,.3)!important;background:linear-gradient(145deg,#17243a,#0c1422)!important;box-shadow:0 24px 90px rgba(0,0,0,.5)!important}
+.xy-crest{font-size:58px;line-height:1;filter:drop-shadow(0 0 16px rgba(214,173,82,.45));animation:crestGlow 3s ease-in-out infinite}
+@keyframes crestGlow{50%{filter:drop-shadow(0 0 24px rgba(214,173,82,.8));transform:translateY(-3px)}}
+.xy-loader{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:radial-gradient(ellipse at center,#1a2940,#080c14 72%);transition:opacity .25s}.xy-loader.out{opacity:0}
+.xy-track{position:relative;width:min(380px,78vw);height:76px;overflow:hidden;border-bottom:1px solid rgba(214,173,82,.55)}
+.xy-knight{position:absolute;bottom:0;font-size:58px;line-height:1;color:var(--gold);filter:drop-shadow(0 0 12px rgba(214,173,82,.5));animation:gallop 2.1s linear infinite,bob .32s ease-in-out infinite}
+@keyframes gallop{from{left:-80px}to{left:100%}}@keyframes bob{0%,100%{transform:scaleX(-1) translateY(0)}50%{transform:scaleX(-1) translateY(-7px)}}
+.xy-sword{font-size:26px;animation:swing 1.2s ease-in-out infinite;transform-origin:50% 90%}@keyframes swing{0%,100%{transform:rotate(-18deg)}50%{transform:rotate(18deg)}}
+.xy-bar{width:min(280px,70vw);height:4px;background:#26354b;border-radius:5px;overflow:hidden}.xy-bar i{display:block;height:100%;width:40%;background:linear-gradient(90deg,transparent,var(--gold),transparent);animation:slide 1.2s ease-in-out infinite}
 @keyframes slide{from{transform:translateX(-100%)}to{transform:translateX(260%)}}
-.xy-msg{font-family:Georgia,'Times New Roman',serif;letter-spacing:.22em;color:#c9a227;font-size:15px;text-transform:uppercase;text-align:center}
-@media(prefers-reduced-motion:reduce){.xy-knight,.xy-sword,.xy-bar i,.xy-crest{animation:none}.xy-knight{left:45%}}
-/* Knightly command interface refinements */
-.xy-card{transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
-.xy-card:hover{transform:translateY(-2px);border-color:#8f7418!important;box-shadow:0 12px 34px rgba(0,0,0,.58)!important}
-.q-field--outlined .q-field__control:before{border-color:#414a56}
-.q-field--outlined.q-field--focused .q-field__control:after{border-color:#c9a227}
-.q-tab-panels{border-radius:8px}
-.q-tab{min-height:44px}
-.q-btn{letter-spacing:.015em}
-.xy-header{min-height:64px}
-.xy-brand{white-space:nowrap}
-.xy-preview{line-height:1.55}
-.xy-transcript{overflow-wrap:anywhere}
-@media(max-width:600px){
- .xy-brand{font-size:17px;letter-spacing:.12em}
- .xy-num{font-size:24px}
- .q-page-container{padding-left:0!important}
- .xy-card{padding:14px!important}
- .q-tab{padding:0 9px;font-size:12px}
-}
-""".replace('__CASTLE__', castle_uri())
-
+.xy-msg{font-family:Georgia,serif;letter-spacing:.18em;color:var(--gold2);font-size:12px;text-transform:uppercase;text-align:center}
+@media(max-width:700px){.xy-header{height:60px;padding:0 12px!important}.xy-drawer{width:280px!important}.xy-hero{padding:22px!important}.xy-card{padding:14px!important}.xy-page-title{font-size:24px}.xy-num{font-size:25px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+"""
 def theme():
     ui.add_css(CSS)
     ui.colors(primary='#c9a227', secondary='#7b8794', accent='#a63d34', positive='#5f9e6e', negative='#c0483d', info='#5b7ea6', warning='#d08a2e')
@@ -279,24 +264,39 @@ def dur(sec):
 def stars(n): return '★' * n + '☆' * (5 - n) if n else '—'
 
 def shell(s, bg, current=None):
-    with ui.header().classes('xy-header items-center justify-between q-px-md'):
+    with ui.header().classes('xy-header items-center justify-between'):
         with ui.row().classes('items-center gap-3 no-wrap'):
             menu = ui.button(icon='menu').props('flat round dense color=primary').classes('lt-md')
-            ui.label('🛡️').classes('text-2xl')
+            ui.label('♜').classes('text-2xl text-primary')
             ui.label('XYPHER').classes('xy-brand')
+            ui.label(' / COMMAND CENTRE').classes('xy-dim text-xs gt-sm')
         with ui.row().classes('items-center gap-3 no-wrap'):
-            ui.label(s['user']['name']).classes('gt-xs')
-            with ui.avatar(size='36px'): ui.image(s['user']['avatar'])
-            ui.button(icon='logout', on_click=lambda: ui.navigate.to('/logout')).props('flat round dense').tooltip('Log out')
-    with ui.left_drawer(value=True, bordered=False).classes('xy-drawer q-pa-sm') as drawer:
-        ui.button('Overview', icon='castle', on_click=lambda: ui.navigate.to('/')).props(f'flat no-caps align=left {"color=primary" if current is None else ""}').classes('w-full')
-        ui.label('YOUR KINGDOMS').classes('xy-dim text-xs q-mt-md q-mb-xs q-ml-sm')
-        for gid, g in s['managed'].items():
-            if gid in bg:
-                ui.button(g['name'], icon='shield', on_click=lambda gid=gid: ui.navigate.to(f'/guild/{gid}')).props(
-                    f'flat no-caps align=left {"color=primary" if current == gid else ""}').classes('w-full ellipsis')
-            else:
-                ui.button(g['name'], icon='add_circle_outline', on_click=lambda gid=gid: ui.navigate.to(invite_url(gid), new_tab=True)).props('flat no-caps align=left color=grey').classes('w-full ellipsis').tooltip('Invite Xypher')
+            ui.label('KNIGHT ACCESS').classes('xy-pill gt-sm')
+            ui.label(s['user']['name']).classes('gt-xs text-sm')
+            with ui.avatar(size='34px'): ui.image(s['user']['avatar'])
+            ui.button(icon='logout', on_click=lambda: ui.navigate.to('/logout')).props('flat round dense color=grey-5').tooltip('Log out')
+    with ui.left_drawer(value=True, bordered=False).props('width=250 breakpoint=700').classes('xy-drawer') as drawer:
+        with ui.column().classes('w-full gap-1'):
+            with ui.row().classes('items-center gap-2 q-px-sm q-py-md'):
+                ui.label('🛡️').classes('text-3xl')
+                with ui.column().classes('gap-0'):
+                    ui.label('THE CITADEL').classes('xy-brand text-sm')
+                    ui.label('BOT CONTROL').classes('xy-dim text-xs')
+            ui.separator().classes('q-my-sm')
+            ui.label('COMMAND').classes('xy-section-label')
+            ui.button('Command overview', icon='space_dashboard', on_click=lambda: ui.navigate.to('/')).props(
+                f'flat no-caps align=left {"color=primary" if current is None else ""}').classes('w-full')
+            ui.label('YOUR KINGDOMS').classes('xy-section-label')
+            for gid, g in s['managed'].items():
+                if gid in bg:
+                    ui.button(g['name'], icon='shield', on_click=lambda gid=gid: ui.navigate.to(f'/guild/{gid}')).props(
+                        f'flat no-caps align=left {"color=primary" if current == gid else ""}').classes('w-full ellipsis')
+                else:
+                    ui.button(g['name'], icon='add_circle_outline', on_click=lambda gid=gid: ui.navigate.to(invite_url(gid), new_tab=True)).props(
+                        'flat no-caps align=left color=grey').classes('w-full ellipsis').tooltip('Invite Xypher')
+            ui.space()
+            ui.separator().classes('q-my-sm')
+            ui.label('KNIGHT OF THE REALM  •  v1').classes('xy-dim text-xs q-pa-sm')
     menu.on('click', drawer.toggle)
 
 def invite_url(gid):
@@ -336,29 +336,50 @@ async def index(request: Request):
     shell(s, bg)
     mine = [g for g in s['managed'] if g in bg]
     with ui.page_container():
-        with ui.column().classes('w-full max-w-6xl mx-auto q-pa-md gap-4'):
+        with ui.column().classes('w-full max-w-7xl mx-auto q-pa-lg gap-5'):
+            with ui.element('div').classes('xy-hero w-full'):
+                with ui.column().classes('gap-3').style('position:relative;z-index:1;max-width:720px'):
+                    ui.label('THE CITADEL  /  COMMAND OVERVIEW').classes('xy-hero-kicker')
+                    ui.label(f"Welcome back, {s['user']['name']}").classes('xy-hero-title')
+                    ui.label('Your realm is under your command. Review your servers, keep an eye on activity, and configure Xypher from one place.').classes('xy-hero-copy')
+                    with ui.row().classes('items-center gap-2 q-mt-sm'):
+                        ui.button('View kingdoms', icon='shield', on_click=lambda: ui.run_javascript("document.getElementById('kingdoms')?.scrollIntoView({behavior:'smooth'})")).props('unelevated no-caps color=primary')
+                        ui.label('⚔  FORTIFY YOUR COMMUNITY').classes('xy-hero-kicker')
             if guild_check_error:
                 ui.label('Discord is taking longer than usual to verify server access. Your server links are still available; opening one will retry.').classes('text-warning text-sm')
-            ui.label(f"Welcome back, Sir {s['user']['name']}").classes('xy-h text-3xl')
-            ui.label('Choose a kingdom to manage, or invite Xypher to a new one.').classes('xy-dim')
+            ui.label('REALM INTELLIGENCE').classes('xy-section-label')
             with stat_grid():
                 stat('Kingdoms you command', len(mine), 'castle')
                 stat('Kingdoms guarded', len(bg), 'shield')
                 stat('Xycoins in circulation', fmt(db.one('SELECT COALESCE(SUM(wallet+bank),0) t FROM users')['t']), 'paid')
                 stat('Open tickets', db.one("SELECT COUNT(*) c FROM tickets WHERE status!='closed'")['c'], 'confirmation_number')
-            with two_col():
+            with ui.row().classes('items-center justify-between w-full q-mt-sm'):
+                with ui.column().classes('gap-1'):
+                    ui.label('YOUR KINGDOMS').classes('xy-page-title')
+                    ui.label('Select a server to open its control room.').classes('xy-page-sub')
+                ui.label(f'{len(s["managed"])} SERVER(S)').classes('xy-pill')
+            with ui.grid(columns='repeat(auto-fit,minmax(265px,1fr))').classes('w-full').props('id=kingdoms'):
                 for gid, g in s['managed'].items():
                     has = gid in bg
-                    with ui.card().classes('xy-card'):
+                    with ui.card().classes('xy-card xy-server-card'):
                         with ui.row().classes('items-center no-wrap gap-3'):
-                            with ui.avatar(size='48px', color='grey-9'):
-                                if g.get('icon'): ui.image(f"https://cdn.discordapp.com/icons/{gid}/{g['icon']}.png?size=64")
-                                else: ui.label(g['name'][:1]).classes('xy-h')
-                            with ui.column().classes('gap-0 grow').style('min-width:0'):
-                                ui.label(g['name']).classes('xy-h ellipsis')
-                                ui.label('Xypher is guarding this realm' if has else 'Xypher is not here yet').classes('xy-dim text-sm')
-                        if has: ui.button('Manage', icon='tune', on_click=lambda gid=gid: ui.navigate.to(f'/guild/{gid}')).props('unelevated no-caps color=primary').classes('q-mt-md')
-                        else: ui.button('Invite Xypher', icon='add', on_click=lambda gid=gid: ui.navigate.to(invite_url(gid), new_tab=True)).props('outline no-caps color=primary').classes('q-mt-md')
+                            with ui.avatar(size='52px', color='blue-grey-10'):
+                                if g.get('icon'): ui.image(f"https://cdn.discordapp.com/icons/{gid}/{g['icon']}.png?size=96")
+                                else: ui.label(g['name'][:1]).classes('xy-h text-xl')
+                            with ui.column().classes('gap-1 grow').style('min-width:0'):
+                                ui.label(g['name']).classes('xy-h text-lg ellipsis')
+                                ui.label('BOT CONNECTED' if has else 'BOT NOT INSTALLED').classes('xy-hero-kicker')
+                        ui.separator().classes('q-my-sm')
+                        ui.label('Manage moderation, welcome settings, tickets and your community tools.').classes('xy-page-sub')
+                        if has:
+                            ui.button('Enter command room', icon='arrow_forward', on_click=lambda gid=gid: ui.navigate.to(f'/guild/{gid}')).props('unelevated no-caps color=primary').classes('w-full q-mt-sm')
+                        else:
+                            ui.button('Summon Xypher', icon='add', on_click=lambda gid=gid: ui.navigate.to(invite_url(gid), new_tab=True)).props('outline no-caps color=primary').classes('w-full q-mt-sm')
+            if not s['managed']:
+                with ui.card().classes('xy-card w-full items-center text-center q-pa-xl'):
+                    ui.label('🏰').classes('text-5xl')
+                    ui.label('No kingdoms found yet').classes('xy-h text-xl')
+                    ui.label('Make sure your Discord account has Manage Server permission, then sign in again.').classes('xy-dim')
 
 @ui.page('/guild/{gid}')
 async def guild_page(request: Request, gid: str):
@@ -393,8 +414,13 @@ async def guild_page(request: Request, gid: str):
         db.set_settings(gid, patch); ui.notify(msg, type='positive')
 
     with ui.page_container():
-        with ui.column().classes('w-full max-w-6xl mx-auto q-pa-md gap-3'):
-            ui.label(gname).classes('xy-h text-3xl')
+        with ui.column().classes('w-full max-w-7xl mx-auto q-pa-lg gap-4'):
+            with ui.row().classes('items-center justify-between w-full'):
+                with ui.column().classes('gap-1'):
+                    ui.label('KINGDOM CONTROL ROOM').classes('xy-hero-kicker')
+                    ui.label(gname).classes('xy-page-title')
+                    ui.label('Manage the realm systems and review recent activity.').classes('xy-page-sub')
+                ui.button('All kingdoms', icon='arrow_back', on_click=lambda: ui.navigate.to('/')).props('flat no-caps color=grey-5')
             with ui.tabs().props('align=left inline-label mobile-arrows').classes('w-full') as tabs:
                 t_over = ui.tab('Overview', icon='castle')
                 t_wel = ui.tab('Welcome', icon='waving_hand')
