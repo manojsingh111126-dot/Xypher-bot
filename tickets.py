@@ -55,7 +55,7 @@ async def create_ticket(i: discord.Interaction, t, subject, details):
     g, s = i.guild, db.get_settings(i.guild.id)
     n_open = db.one("SELECT COUNT(*) c FROM tickets WHERE guild=? AND user=? AND status!='closed'", (str(g.id), str(i.user.id)))['c']
     if n_open >= int(s['ticketMax']):
-        return await i.response.send_message(f'🎫 You already have {n_open} open ticket(s) (limit {s["ticketMax"]}).', ephemeral=True)
+        return await i.response.send_message(embed=embed('🎫 Ticket limit reached', f'You already have **{n_open}** open ticket(s). Your limit is **{s["ticketMax"]}**.'), ephemeral=True)
     await i.response.defer(ephemeral=True)
     num = db.one('SELECT COALESCE(MAX(num),0)+1 n FROM tickets WHERE guild=?', (str(g.id),))['n']
     cat = g.get_channel(int(s['ticketCategory'])) if s['ticketCategory'] else None
@@ -68,7 +68,7 @@ async def create_ticket(i: discord.Interaction, t, subject, details):
     try:
         ch = await g.create_text_channel(f"{slug(t['label'])}-{num:04d}", category=cat, topic=f'ticket:{i.user.id}:{num}', overwrites=ow)
     except discord.HTTPException:
-        return await i.followup.send('I could not create the ticket channel. Check my permissions.', ephemeral=True)
+        return await i.followup.send(embed=embed('⚠️ The gates are closed', 'I could not create the ticket channel. Please check my channel and role permissions.', RED), ephemeral=True)
     db.run('INSERT INTO tickets(guild,num,channel,user,category,subject,details,priority,status,created) VALUES(?,?,?,?,?,?,?,?,?,?)',
            (str(g.id), num, str(ch.id), str(i.user.id), t['label'], subject, details, 'normal', 'open', now()))
     e = embed(f"🎫 Ticket #{num:04d} — {t['label']}", s['ticketWelcome'].replace('{user}', i.user.mention).replace('{type}', t['label']))
@@ -80,7 +80,7 @@ async def create_ticket(i: discord.Interaction, t, subject, details):
     ping = i.user.mention + (f' {role.mention}' if role and s['ticketPing'] else '')
     await ch.send(content=ping, embed=e, view=controls())
     await log(g, f"🎫 Ticket **#{num:04d}** ({t['label']}) opened by **{i.user}**")
-    await i.followup.send(f'Your ticket is ready: {ch.mention}', ephemeral=True)
+    await i.followup.send(embed=embed('🎫 Your audience is ready', f'Your private ticket has been opened: {ch.mention}'), ephemeral=True)
 
 async def claim(i: discord.Interaction):
     s, row = db.get_settings(i.guild.id), ticket_row(i.channel.id)
@@ -151,15 +151,15 @@ class Tickets(commands.Cog):
         try:
             if p[1] == 'open' and i.guild:
                 t = next((x for x in db.get_settings(i.guild.id)['ticketTypes'] if x['key'] == p[2]), None)
-                if not t: return await i.response.send_message('That ticket category no longer exists.', ephemeral=True)
+                if not t: return await i.response.send_message(embed=embed('📜 Category unavailable', 'That ticket category no longer exists. Please use the latest ticket panel.', RED), ephemeral=True)
                 await i.response.send_modal(OpenModal(t))
             elif p[1] == 'claim' and i.guild: await claim(i)
             elif p[1] == 'close' and i.guild: await i.response.send_modal(CloseModal())
             elif p[1] == 'rate':
                 row = db.one('SELECT * FROM tickets WHERE id=?', (int(p[2]),))
-                if not row or row['user'] != str(i.user.id): return await i.response.send_message('This is not your ticket.', ephemeral=True)
+                if not row or row['user'] != str(i.user.id): return await i.response.send_message(embed=embed('🛡️ Access denied', 'This rating belongs to another knight.', RED), ephemeral=True)
                 db.run('UPDATE tickets SET rating=? WHERE id=?', (int(p[3]), row['id']))
-                await i.response.edit_message(content=f'Thank you! You rated this ticket {"⭐" * int(p[3])}.', view=None)
+                await i.response.edit_message(content=None, embed=embed('⭐ Rating received', f'Thank you for rating this ticket {"⭐" * int(p[3])}.'), view=None)
         except Exception as e:
             print('Ticket interaction error:', repr(e))
 
@@ -168,7 +168,7 @@ class Tickets(commands.Cog):
     async def panel(self, i: discord.Interaction):
         s = db.get_settings(i.guild.id)
         await i.channel.send(embed=embed(s['panelTitle'], s['panelDesc']), view=panel_view(s['ticketTypes']))
-        await i.response.send_message('Panel posted.', ephemeral=True)
+        await i.response.send_message(embed=embed('📜 Royal decree delivered', 'The ticket panel has been posted in this channel.'), ephemeral=True)
 
     @ticket.command(name='add', description='Add a user to this ticket')
     async def add(self, i: discord.Interaction, user: discord.Member):

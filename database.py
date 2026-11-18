@@ -40,6 +40,7 @@ def init():
             created INTEGER, closed INTEGER, closed_by TEXT, close_reason TEXT, rating INTEGER, transcript TEXT);
         CREATE INDEX IF NOT EXISTS idx_tickets_guild ON tickets(guild);
         CREATE TABLE IF NOT EXISTS sessions(sid TEXT PRIMARY KEY, data TEXT, exp REAL);
+        CREATE INDEX IF NOT EXISTS idx_sessions_exp ON sessions(exp);
         ''')
         c.commit()
 

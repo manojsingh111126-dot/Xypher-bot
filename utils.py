@@ -1,12 +1,14 @@
 import time, discord
 import database as db
 
-GOLD, RED, STEEL = 0xC9A227, 0xB03A2E, 0x7B8794
+GOLD, RED, STEEL, NIGHT = 0xC9A227, 0xB03A2E, 0x7B8794, 0x171B22
 COIN, COINS = '🪙', 'Xycoins'
 
 def embed(title, desc=None, color=GOLD):
-    e = discord.Embed(title=title, description=desc, color=color)
+    """Build every bot message with the Xypher night-castle visual identity."""
+    e = discord.Embed(title=title, description=desc, color=color or GOLD)
     e.set_footer(text='Xypher • Knight of the Realm ⚔️')
+    e.timestamp = discord.utils.utcnow()
     return e
 
 def fmt(n): return f'{int(n):,}'

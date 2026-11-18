@@ -1,10 +1,10 @@
 """Xypher Castle Command — pure-Python dashboard (NiceGUI) with Discord OAuth2 login.
-Run:  python dashboard.py     (bot.py or main.py starts it automatically when RUN_DASHBOARD=1)"""
-import os, re, json, time, asyncio, secrets, traceback
+Run:  python dashboard.py     (bot.py starts it automatically when RUN_DASHBOARD=1)"""
+import os, re, json, time, asyncio, secrets
 from collections import Counter
 from datetime import datetime, timedelta
 from urllib.parse import urlencode, quote
-from aiohttp import ClientSession, ClientTimeout
+from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.responses import RedirectResponse, PlainTextResponse
@@ -13,13 +13,11 @@ from nicegui import app, ui
 load_dotenv()
 import database as db
 
-def _env(k, d=''): return (os.getenv(k) or d).strip().strip('"\'')
-TOKEN, CLIENT_ID, CLIENT_SECRET = _env('DISCORD_TOKEN'), _env('CLIENT_ID'), _env('CLIENT_SECRET')
-BASE_URL = _env('DASHBOARD_URL', 'https://xypherbot.fadehost.app')
-if not BASE_URL.startswith('http'): BASE_URL = 'https://' + BASE_URL
-BASE_URL = re.sub(r'/(auth/)?callback/?$', '', BASE_URL).rstrip('/')
-REDIRECT = _env('REDIRECT_URI') or (BASE_URL + '/auth/callback')
-print(f'🔐 OAuth redirect URI sent to Discord: {REDIRECT}  (client id: {CLIENT_ID or "MISSING"})')
+TOKEN = os.getenv('DISCORD_TOKEN', '')
+CLIENT_ID = os.getenv('CLIENT_ID', '')
+CLIENT_SECRET = os.getenv('CLIENT_SECRET', '')
+BASE_URL = os.getenv('DASHBOARD_URL', 'http://localhost:8080').rstrip('/')
+REDIRECT = BASE_URL + '/callback'
 API = 'https://discord.com/api/v10'
 SECURE = BASE_URL.startswith('https')
 PORT = int(os.getenv('SERVER_PORT') or os.getenv('PORT') or os.getenv('DASHBOARD_PORT') or 8080)
@@ -33,7 +31,7 @@ _http, _cache = None, {}
 
 def http():
     global _http
-    if _http is None or _http.closed: _http = ClientSession(timeout=ClientTimeout(total=8))
+    if _http is None or _http.closed: _http = ClientSession(timeout=ClientTimeout(total=9), connector=TCPConnector(limit=30, ttl_dns_cache=300))
     return _http
 
 async def cached(key, ttl, fn):
@@ -57,29 +55,33 @@ async def dpost(path, payload):
     async with http().post(API + path, json=payload, headers={'Authorization': f'Bot {TOKEN}'}) as r:
         return (r.status < 300), (await r.text())[:300]
 
-async def bot_guilds(guild_ids):
-    """Check only the user's managed guilds using bot-authenticated requests.
+async def bot_guilds(managed_ids=None):
+    """Return guilds the bot can actually access.
 
-    /users/@me/guilds requires an OAuth2 user token; it must not be called with
-    the bot token. GET /guilds/{id} is used to verify bot access instead.
+    /users/@me/guilds is an OAuth2 user endpoint and must never be called
+    with the bot token. We already know the user's manageable guild IDs from
+    OAuth, so check those IDs with GET /guilds/{guild_id} using bot auth.
     """
-    async def check(gid):
-        try:
-            return gid, await dget(f'/guilds/{gid}')
-        except Exception as exc:
-            if getattr(exc, 'status', None) in (403, 404):
-                return None
-            raise
+    ids = tuple(sorted(str(x) for x in (managed_ids or []) if str(x)))
+    key = 'bg:' + ','.join(ids)
+    async def load():
+        sem = asyncio.Semaphore(8)
+        async def one(gid):
+            async with sem:
+                try:
+                    data = await dget(f'/guilds/{gid}')
+                    return gid, data
+                except Exception as exc:
+                    status = getattr(exc, 'status', None)
+                    if status in (403, 404):
+                        return gid, None
+                    raise
+        results = await asyncio.gather(*(one(gid) for gid in ids))
+        return {gid: data for gid, data in results if data}
+    return await cached(key, 25, load)
 
-    ids = list(dict.fromkeys(str(gid) for gid in guild_ids))
-    if not ids:
-        return {}
-    results = await asyncio.gather(
-        *(cached(f'bg:{gid}', 30, lambda gid=gid: check(gid)) for gid in ids)
-    )
-    return {gid: guild for item in results if item for gid, guild in [item]}
-
-async def bot_user(): return await cached('bu', 3600, lambda: dget('/users/@me'))
+async def bot_user():
+    return await cached('bu', 3600, lambda: dget('/users/@me'))
 async def get_channels(gid): return await cached(f'ch{gid}', 30, lambda: dget(f'/guilds/{gid}/channels'))
 async def get_roles(gid): return await cached(f'ro{gid}', 30, lambda: dget(f'/guilds/{gid}/roles'))
 
@@ -91,17 +93,12 @@ async def uname(uid):
         return str(uid)
 
 async def names(ids):
-    # Resolve names concurrently; one failed lookup must not discard all results.
-    ids = list(dict.fromkeys(i for i in ids if i))[:40]
-    if not ids:
-        return {}
-    try:
-        values = await asyncio.wait_for(
-            asyncio.gather(*(uname(uid) for uid in ids), return_exceptions=True), 3.0
-        )
-        return {uid: value for uid, value in zip(ids, values) if isinstance(value, str)}
-    except asyncio.TimeoutError:
-        return {}
+    ids = [i for i in set(ids) if i][:150]
+    sem = asyncio.Semaphore(8)
+    async def limited(uid):
+        async with sem: return await uname(uid)
+    vals = await asyncio.gather(*(limited(i) for i in ids), return_exceptions=True)
+    return {uid: (v if isinstance(v, str) else uid) for uid, v in zip(ids, vals)}
 
 def avatar_url(u):
     if u.get('avatar'): return f"https://cdn.discordapp.com/avatars/{u['id']}/{u['avatar']}.png?size=128"
@@ -113,13 +110,6 @@ def sess(request: Request):
     return json.loads(r['data']) if r else None
 
 # ───────────────────────── OAuth2 routes ─────────────────────────
-@app.get('/auth/health')
-async def health(): return PlainTextResponse('ok')
-
-@app.get('/auth/debug')
-async def auth_debug():
-    return PlainTextResponse(f'redirect_uri = {REDIRECT}\nclient_id    = {CLIENT_ID or "MISSING"}\nsecret set   = {bool(CLIENT_SECRET)}\nbase url     = {BASE_URL}')
-
 @app.get('/login')
 async def login():
     if not (CLIENT_ID and CLIENT_SECRET): return PlainTextResponse('CLIENT_ID / CLIENT_SECRET are not configured.', status_code=500)
@@ -130,11 +120,10 @@ async def login():
     r.set_cookie('xy_state', state, max_age=600, httponly=True, secure=SECURE, samesite='lax')
     return r
 
-@app.get('/auth/callback')
 @app.get('/callback')
 async def callback(request: Request):
     code, state = request.query_params.get('code'), request.query_params.get('state')
-    if not code or not state or state != request.cookies.get('xy_state'): return RedirectResponse('/?error=login')
+    if not code or not state or not secrets.compare_digest(state, request.cookies.get('xy_state') or ''): return RedirectResponse('/?error=login')
     try:
         async with http().post(API + '/oauth2/token', data={'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET, 'grant_type': 'authorization_code',
                                                              'code': code, 'redirect_uri': REDIRECT}) as r:
@@ -183,8 +172,9 @@ def castle_uri():
     return 'data:image/svg+xml;utf8,' + quote(svg)
 
 CSS = r"""
+/* Local font stack: no external font request on first paint. */
 html,body{background:#0e1014}
-body,.q-field,.q-btn,.q-tab{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:16px}
+body,.q-field,.q-btn,.q-tab{font-family:Georgia,'Trebuchet MS',sans-serif;font-size:16px}
 body::before{content:"";position:fixed;inset:0;z-index:-2;
  background:radial-gradient(ellipse at 50% -10%,rgba(201,162,39,.18),transparent 55%),radial-gradient(circle at 12% 88%,rgba(166,61,52,.14),transparent 40%),
  linear-gradient(180deg,#0e1014,#171b22 60%,#1d222b)}
@@ -195,9 +185,8 @@ body::after{content:"";position:fixed;left:0;right:0;bottom:0;height:42vh;z-inde
 .xy-h{font-family:Georgia,'Times New Roman',serif;font-weight:700;color:#efe6cc;letter-spacing:.03em}
 .xy-dim{color:#9aa1ab}
 .xy-num{font-family:Georgia,'Times New Roman',serif;font-size:28px;font-weight:700;color:#c9a227;line-height:1.1}
-.xy-card{transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease;background:rgba(22,26,33,.88)!important;border:1px solid #3b434e;border-top:2px solid #8f7418;border-radius:6px!important;
+.xy-card{background:rgba(22,26,33,.88)!important;border:1px solid #3b434e;border-top:2px solid #8f7418;border-radius:6px!important;
  box-shadow:0 8px 28px rgba(0,0,0,.5)!important;backdrop-filter:blur(6px)}
-.xy-card:hover{border-color:#8f7418;box-shadow:0 12px 32px rgba(0,0,0,.42)!important}
 .xy-header{background:rgba(12,14,18,.93)!important;border-bottom:1px solid #8f7418;backdrop-filter:blur(8px)}
 .xy-drawer{background:rgba(15,17,22,.95)!important}
 .q-btn.bg-primary{color:#1a1405!important;font-weight:700}
@@ -221,11 +210,27 @@ body::after{content:"";position:fixed;left:0;right:0;bottom:0;height:42vh;z-inde
 .xy-bar{width:min(320px,70vw);height:6px;background:#2a303a;border-radius:3px;overflow:hidden}
 .xy-bar i{display:block;height:100%;width:40%;background:linear-gradient(90deg,transparent,#c9a227,transparent);animation:slide 1.3s ease-in-out infinite}
 @keyframes slide{from{transform:translateX(-100%)}to{transform:translateX(260%)}}
-.xy-loader::after{content:'Taking longer than usual… try refreshing the page.';position:absolute;bottom:8%;color:#9aa1ab;opacity:0;animation:hint .4s 12s forwards}
-@keyframes hint{to{opacity:1}}
 .xy-msg{font-family:Georgia,'Times New Roman',serif;letter-spacing:.22em;color:#c9a227;font-size:15px;text-transform:uppercase;text-align:center}
-@media(max-width:600px){.xy-brand{font-size:17px;letter-spacing:.12em}.xy-num{font-size:24px}.q-tab{font-size:12px}.xy-card{padding:12px!important}}
 @media(prefers-reduced-motion:reduce){.xy-knight,.xy-sword,.xy-bar i,.xy-crest{animation:none}.xy-knight{left:45%}}
+/* Knightly command interface refinements */
+.xy-card{transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+.xy-card:hover{transform:translateY(-2px);border-color:#8f7418!important;box-shadow:0 12px 34px rgba(0,0,0,.58)!important}
+.q-field--outlined .q-field__control:before{border-color:#414a56}
+.q-field--outlined.q-field--focused .q-field__control:after{border-color:#c9a227}
+.q-tab-panels{border-radius:8px}
+.q-tab{min-height:44px}
+.q-btn{letter-spacing:.015em}
+.xy-header{min-height:64px}
+.xy-brand{white-space:nowrap}
+.xy-preview{line-height:1.55}
+.xy-transcript{overflow-wrap:anywhere}
+@media(max-width:600px){
+ .xy-brand{font-size:17px;letter-spacing:.12em}
+ .xy-num{font-size:24px}
+ .q-page-container{padding-left:0!important}
+ .xy-card{padding:14px!important}
+ .q-tab{padding:0 9px;font-size:12px}
+}
 """.replace('__CASTLE__', castle_uri())
 
 def theme():
@@ -244,21 +249,6 @@ def loader(msg='Rallying the knights…'):
         with ui.element('div').classes('xy-bar'):
             ui.element('i')
     return el
-
-async def guarded(ld, coro):
-    t0 = time.time()
-    try:
-        await coro
-        print(f'⏱️  page ready in {time.time() - t0:.2f}s')
-    except Exception as e:
-        print('❌ Page error:'); traceback.print_exc()
-        try:
-            await hide(ld)
-            with ui.card().classes('xy-card absolute-center').style('width:min(520px,92vw)'):
-                ui.label('⚠️ The castle ran into trouble').classes('xy-h text-xl')
-                ui.label(f'{type(e).__name__}: {e}').classes('xy-dim')
-                ui.button('Retry', on_click=lambda: ui.navigate.reload()).props('unelevated no-caps color=primary')
-        except Exception: pass
 
 async def hide(el):
     el.classes('out')
@@ -321,10 +311,7 @@ def valid(v, items): return v if v and v in {i['id'] for i in items} else None
 async def index(request: Request):
     theme()
     ld = loader('Opening the castle gates…')
-    await guarded(ld, _index(request, ld))
-
-async def _index(request: Request, ld):
-    await ui.context.client.connected(timeout=15)
+    await ui.context.client.connected()
     s = sess(request)
     if not s:
         await hide(ld)
@@ -334,20 +321,24 @@ async def _index(request: Request, ld):
                 ui.label('XYPHER').classes('xy-brand text-4xl q-mt-sm')
                 ui.label('CASTLE COMMAND').classes('xy-dim q-mb-md').style('letter-spacing:.3em')
                 ui.label('Sign in with Discord to command your kingdoms — moderation, tickets, treasury and more.').classes('xy-dim q-mb-lg')
-                ui.button('Login with Discord', icon='login', on_click=lambda: ui.navigate.to('/login')).props('size=lg no-caps unelevated color=indigo-6').classes('w-full')
+                ui.button('Login with Discord', icon='login', on_click=lambda: ui.navigate.to('/login')).props('size=lg no-caps unelevated color=primary').classes('w-full')
                 if request.query_params.get('error'): ui.label('Login failed. Please try again.').classes('text-negative q-mt-md')
         return
-    try: bg = await bot_guilds(s['managed'].keys())
-    except Exception as e:
-        print(f'Guild status check failed: {e!r}')
-        # Keep the Manage action visible during a temporary Discord API outage;
-        # the server page will show the actual API error instead of a false Invite state.
-        bg = {gid: {} for gid in s['managed']}
+    guild_check_error = False
+    try:
+        bg = await bot_guilds(s['managed'].keys())
+    except Exception:
+        guild_check_error = True
+        # Keep the user's Manage links visible during a temporary Discord API
+        # outage; the server page will retry and show the actual error.
+        bg = {gid: {'id': gid} for gid in s['managed']}
     await hide(ld)
     shell(s, bg)
     mine = [g for g in s['managed'] if g in bg]
     with ui.page_container():
         with ui.column().classes('w-full max-w-6xl mx-auto q-pa-md gap-4'):
+            if guild_check_error:
+                ui.label('Discord is taking longer than usual to verify server access. Your server links are still available; opening one will retry.').classes('text-warning text-sm')
             ui.label(f"Welcome back, Sir {s['user']['name']}").classes('xy-h text-3xl')
             ui.label('Choose a kingdom to manage, or invite Xypher to a new one.').classes('xy-dim')
             with stat_grid():
@@ -373,10 +364,7 @@ async def _index(request: Request, ld):
 async def guild_page(request: Request, gid: str):
     theme()
     ld = loader('Summoning the council…')
-    await guarded(ld, _guild(request, gid, ld))
-
-async def _guild(request: Request, gid: str, ld):
-    await ui.context.client.connected(timeout=15)
+    await ui.context.client.connected()
     s = sess(request)
     if not s: return ui.navigate.to('/')
     try:

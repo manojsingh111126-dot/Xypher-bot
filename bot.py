@@ -29,8 +29,17 @@ class Xypher(commands.Bot):
             await self.tree.sync()
         if os.getenv('RUN_DASHBOARD', '1') == '1':
             import subprocess, sys, atexit
-            proc = subprocess.Popen([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dashboard.py')])
-            atexit.register(proc.terminate)
+            root = os.path.dirname(os.path.abspath(__file__))
+            dashboard_file = os.path.join(root, 'dashboard.py')
+            if os.path.isfile(dashboard_file):
+                proc = subprocess.Popen(
+                    [sys.executable, '-u', dashboard_file],
+                    cwd=root,
+                    env=os.environ.copy(),
+                )
+                atexit.register(proc.terminate)
+            else:
+                print('⚠️ dashboard.py was not found; bot will continue without the dashboard.')
 
     async def on_ready(self):
         await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name='over the realm ⚔️'))
