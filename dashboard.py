@@ -17,7 +17,7 @@ TOKEN = os.getenv('DISCORD_TOKEN', '')
 CLIENT_ID = os.getenv('CLIENT_ID', '')
 CLIENT_SECRET = os.getenv('CLIENT_SECRET', '')
 BASE_URL = os.getenv('DASHBOARD_URL', 'http://localhost:8080').rstrip('/')
-REDIRECT = BASE_URL + '/callback'
+REDIRECT = os.getenv('REDIRECT_URI') or (BASE_URL + '/auth/callback')
 API = 'https://discord.com/api/v10'
 SECURE = BASE_URL.startswith('https')
 PORT = int(os.getenv('SERVER_PORT') or os.getenv('PORT') or os.getenv('DASHBOARD_PORT') or 8080)
@@ -101,6 +101,7 @@ async def login():
     r.set_cookie('xy_state', state, max_age=600, httponly=True, secure=SECURE, samesite='lax')
     return r
 
+@app.get('/auth/callback')
 @app.get('/callback')
 async def callback(request: Request):
     code, state = request.query_params.get('code'), request.query_params.get('state')
