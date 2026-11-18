@@ -1,5 +1,5 @@
 """Xypher Castle Command — pure-Python dashboard (NiceGUI) with Discord OAuth2 login.
-Run:  python dashboard.py     (main.py starts it automatically when RUN_DASHBOARD=1)"""
+Run:  python dashboard.py     (bot.py or main.py starts it automatically when RUN_DASHBOARD=1)"""
 import os, re, json, time, asyncio, secrets, traceback
 from collections import Counter
 from datetime import datetime, timedelta
@@ -57,16 +57,27 @@ async def dpost(path, payload):
     async with http().post(API + path, json=payload, headers={'Authorization': f'Bot {TOKEN}'}) as r:
         return (r.status < 300), (await r.text())[:300]
 
-async def bot_guilds():
-    async def load():
-        out, after = [], None
-        for _ in range(10):
-            page = await dget('/users/@me/guilds?limit=200' + (f'&after={after}' if after else ''))
-            out += page
-            if len(page) < 200: break
-            after = page[-1]['id']
-        return {g['id']: g for g in out}
-    return await cached('bg', 30, load)
+async def bot_guilds(guild_ids):
+    """Check only the user's managed guilds using bot-authenticated requests.
+
+    /users/@me/guilds requires an OAuth2 user token; it must not be called with
+    the bot token. GET /guilds/{id} is used to verify bot access instead.
+    """
+    async def check(gid):
+        try:
+            return gid, await dget(f'/guilds/{gid}')
+        except Exception as exc:
+            if getattr(exc, 'status', None) in (403, 404):
+                return None
+            raise
+
+    ids = list(dict.fromkeys(str(gid) for gid in guild_ids))
+    if not ids:
+        return {}
+    results = await asyncio.gather(
+        *(cached(f'bg:{gid}', 30, lambda gid=gid: check(gid)) for gid in ids)
+    )
+    return {gid: guild for item in results if item for gid, guild in [item]}
 
 async def bot_user(): return await cached('bu', 3600, lambda: dget('/users/@me'))
 async def get_channels(gid): return await cached(f'ch{gid}', 30, lambda: dget(f'/guilds/{gid}/channels'))
@@ -80,9 +91,17 @@ async def uname(uid):
         return str(uid)
 
 async def names(ids):
-    ids = [i for i in set(ids) if i][:40]
-    try: return dict(zip(ids, await asyncio.wait_for(asyncio.gather(*[uname(i) for i in ids]), 6)))
-    except Exception: return {}
+    # Resolve names concurrently; one failed lookup must not discard all results.
+    ids = list(dict.fromkeys(i for i in ids if i))[:40]
+    if not ids:
+        return {}
+    try:
+        values = await asyncio.wait_for(
+            asyncio.gather(*(uname(uid) for uid in ids), return_exceptions=True), 3.0
+        )
+        return {uid: value for uid, value in zip(ids, values) if isinstance(value, str)}
+    except asyncio.TimeoutError:
+        return {}
 
 def avatar_url(u):
     if u.get('avatar'): return f"https://cdn.discordapp.com/avatars/{u['id']}/{u['avatar']}.png?size=128"
@@ -164,25 +183,25 @@ def castle_uri():
     return 'data:image/svg+xml;utf8,' + quote(svg)
 
 CSS = r"""
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Alegreya+Sans:wght@400;500;700&display=swap');
 html,body{background:#0e1014}
-body,.q-field,.q-btn,.q-tab{font-family:'Alegreya Sans',sans-serif;font-size:16px}
+body,.q-field,.q-btn,.q-tab{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:16px}
 body::before{content:"";position:fixed;inset:0;z-index:-2;
  background:radial-gradient(ellipse at 50% -10%,rgba(201,162,39,.18),transparent 55%),radial-gradient(circle at 12% 88%,rgba(166,61,52,.14),transparent 40%),
  linear-gradient(180deg,#0e1014,#171b22 60%,#1d222b)}
 body::after{content:"";position:fixed;left:0;right:0;bottom:0;height:42vh;z-index:-1;pointer-events:none;opacity:.5;
  background:url("__CASTLE__") bottom center/cover no-repeat}
 .q-layout,.q-page-container,.q-page{background:transparent!important}
-.xy-brand{font-family:Cinzel,serif;font-weight:900;letter-spacing:.2em;color:#c9a227;font-size:21px}
-.xy-h{font-family:Cinzel,serif;font-weight:700;color:#efe6cc;letter-spacing:.03em}
+.xy-brand{font-family:Georgia,'Times New Roman',serif;font-weight:900;letter-spacing:.2em;color:#c9a227;font-size:21px}
+.xy-h{font-family:Georgia,'Times New Roman',serif;font-weight:700;color:#efe6cc;letter-spacing:.03em}
 .xy-dim{color:#9aa1ab}
-.xy-num{font-family:Cinzel,serif;font-size:28px;font-weight:700;color:#c9a227;line-height:1.1}
-.xy-card{background:rgba(22,26,33,.88)!important;border:1px solid #3b434e;border-top:2px solid #8f7418;border-radius:6px!important;
+.xy-num{font-family:Georgia,'Times New Roman',serif;font-size:28px;font-weight:700;color:#c9a227;line-height:1.1}
+.xy-card{transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease;background:rgba(22,26,33,.88)!important;border:1px solid #3b434e;border-top:2px solid #8f7418;border-radius:6px!important;
  box-shadow:0 8px 28px rgba(0,0,0,.5)!important;backdrop-filter:blur(6px)}
+.xy-card:hover{border-color:#8f7418;box-shadow:0 12px 32px rgba(0,0,0,.42)!important}
 .xy-header{background:rgba(12,14,18,.93)!important;border-bottom:1px solid #8f7418;backdrop-filter:blur(8px)}
 .xy-drawer{background:rgba(15,17,22,.95)!important}
 .q-btn.bg-primary{color:#1a1405!important;font-weight:700}
-.q-tab{font-family:Cinzel,serif;letter-spacing:.04em}
+.q-tab{font-family:Georgia,'Times New Roman',serif;letter-spacing:.04em}
 .q-tab--active{color:#c9a227}
 .xy-preview{background:#12151a;border:1px solid #3b434e;border-left:4px solid #c9a227;padding:12px 14px;border-radius:4px;white-space:pre-wrap}
 .xy-transcript{background:#0f1217;border:1px solid #2f363f;border-radius:4px;padding:10px;font-family:monospace;font-size:13px}
@@ -204,7 +223,8 @@ body::after{content:"";position:fixed;left:0;right:0;bottom:0;height:42vh;z-inde
 @keyframes slide{from{transform:translateX(-100%)}to{transform:translateX(260%)}}
 .xy-loader::after{content:'Taking longer than usual… try refreshing the page.';position:absolute;bottom:8%;color:#9aa1ab;opacity:0;animation:hint .4s 12s forwards}
 @keyframes hint{to{opacity:1}}
-.xy-msg{font-family:Cinzel,serif;letter-spacing:.22em;color:#c9a227;font-size:15px;text-transform:uppercase;text-align:center}
+.xy-msg{font-family:Georgia,'Times New Roman',serif;letter-spacing:.22em;color:#c9a227;font-size:15px;text-transform:uppercase;text-align:center}
+@media(max-width:600px){.xy-brand{font-size:17px;letter-spacing:.12em}.xy-num{font-size:24px}.q-tab{font-size:12px}.xy-card{padding:12px!important}}
 @media(prefers-reduced-motion:reduce){.xy-knight,.xy-sword,.xy-bar i,.xy-crest{animation:none}.xy-knight{left:45%}}
 """.replace('__CASTLE__', castle_uri())
 
@@ -242,7 +262,7 @@ async def guarded(ld, coro):
 
 async def hide(el):
     el.classes('out')
-    await asyncio.sleep(.5)
+    await asyncio.sleep(.18)
     el.delete()
 
 def title(text, icon=None, sub=None):
@@ -317,8 +337,12 @@ async def _index(request: Request, ld):
                 ui.button('Login with Discord', icon='login', on_click=lambda: ui.navigate.to('/login')).props('size=lg no-caps unelevated color=indigo-6').classes('w-full')
                 if request.query_params.get('error'): ui.label('Login failed. Please try again.').classes('text-negative q-mt-md')
         return
-    try: bg, bu = await asyncio.gather(bot_guilds(), bot_user())
-    except Exception: bg, bu = {}, {'username': 'Xypher'}
+    try: bg = await bot_guilds(s['managed'].keys())
+    except Exception as e:
+        print(f'Guild status check failed: {e!r}')
+        # Keep the Manage action visible during a temporary Discord API outage;
+        # the server page will show the actual API error instead of a false Invite state.
+        bg = {gid: {} for gid in s['managed']}
     await hide(ld)
     shell(s, bg)
     mine = [g for g in s['managed'] if g in bg]
@@ -356,7 +380,7 @@ async def _guild(request: Request, gid: str, ld):
     s = sess(request)
     if not s: return ui.navigate.to('/')
     try:
-        bg = await bot_guilds()
+        bg = await bot_guilds([gid])
         if gid not in s['managed'] or gid not in bg: raise PermissionError('You cannot manage that kingdom, or Xypher is not in it.')
         chans, roles = await asyncio.gather(get_channels(gid), get_roles(gid))
     except Exception as e:
