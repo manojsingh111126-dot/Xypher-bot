@@ -6,11 +6,48 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-try:  # optional: lets you keep secrets in a .env file next to bot.py
-    from dotenv import load_dotenv
-    load_dotenv()
-except Exception:
-    pass
+# ---------- ENVIRONMENT (works with host variables AND/OR a .env file, no extra package needed) ----------
+def _load_env():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(path):
+        for line in open(path, encoding="utf-8-sig"):
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip().removeprefix("export ").strip()
+            os.environ.setdefault(k, v.strip().strip("\"'"))
+    # clean names/values (stray spaces, quotes, lower-case names)
+    for k, v in list(os.environ.items()):
+        nk, nv = k.strip().upper(), v.strip().strip("\"'")
+        if nk != k or nv != v:
+            os.environ.setdefault(nk, nv)
+            os.environ[nk] = nv if nk == k else os.environ.get(nk, nv)
+    # accept common alternative names
+    alias = {
+        "DISCORD_TOKEN": ["TOKEN", "BOT_TOKEN"],
+        "CLIENT_SECRET": ["DISCORD_CLIENT_SECRET", "OAUTH_CLIENT_SECRET", "CLIENT_SECRET_KEY"],
+        "REDIRECT_URI": ["REDIRECT_URL", "DASHBOARD_REDIRECT_URI", "OAUTH_REDIRECT_URI"],
+        "GROQ_API_KEY": ["GROQ_KEY"], "GEMINI_API_KEY": ["GOOGLE_API_KEY", "GEMINI_KEY"],
+    }
+    for want, others in alias.items():
+        if not os.environ.get(want):
+            for o in others:
+                if os.environ.get(o):
+                    os.environ[want] = os.environ[o]
+                    break
+    if not os.environ.get("REDIRECT_URI"):  # build it from the dashboard's public address if only that was set
+        for o in ("DASHBOARD_URL", "DASHBOARD_URI", "BASE_URL", "PUBLIC_URL"):
+            if os.environ.get(o):
+                os.environ["REDIRECT_URI"] = os.environ[o].rstrip("/") + "/auth/callback"
+                break
+    seen = {k: bool(os.environ.get(k)) for k in ("DISCORD_TOKEN", "CLIENT_SECRET", "REDIRECT_URI", "GROQ_API_KEY", "GEMINI_API_KEY")}
+    print("🔎 Settings found: " + "  ".join(f"{k} {'✅' if ok else '❌'}" for k, ok in seen.items()))
+    related = sorted(k for k in os.environ if any(w in k.upper() for w in ("SECRET", "REDIRECT", "URI", "URL", "CLIENT", "TOKEN", "API_KEY")))
+    print("🔎 Variable NAMES your host gave me (values hidden): " + (", ".join(related) or "none"))
+
+
+_load_env()
 
 from theme import knight_embed, GOLD, DARK, STEEL, CRIMSON, install_error_handlers
 
