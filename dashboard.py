@@ -177,7 +177,12 @@ html,body{background:var(--night)!important;color:#e9eef7}
 body,.q-field,.q-btn,.q-tab{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 body:before{content:"";position:fixed;inset:0;z-index:-2;background:radial-gradient(ellipse at 72% -12%,rgba(214,173,82,.16),transparent 34%),radial-gradient(ellipse at 0% 75%,rgba(47,82,132,.16),transparent 45%),linear-gradient(145deg,#080c14,#0d1523 55%,#080d17)}
 body:after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.12;background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:34px 34px}
-.q-layout,.q-page-container,.q-page{background:transparent!important}.q-page-container{padding-left:0!important}
+.q-layout,.q-page-container,.q-page{background:transparent!important}
+.q-page-container{position:relative!important;z-index:1!important;min-height:calc(100vh - 72px)!important}
+.q-page-container>.q-page{display:block!important;visibility:visible!important;opacity:1!important;min-height:calc(100vh - 72px)!important;width:100%!important}
+.q-page{display:block!important;visibility:visible!important;opacity:1!important;width:100%!important;min-height:calc(100vh - 72px)!important}
+.q-page-container .q-tab-panels,.q-page-container .q-panel{visibility:visible!important;opacity:1!important}
+.q-page-container .q-card,.q-page-container .q-tabs{position:relative;z-index:2}
 .xy-brand{font-family:Georgia,'Times New Roman',serif;font-weight:800;letter-spacing:.19em;color:var(--gold2);font-size:18px}
 .xy-h{font-family:Georgia,'Times New Roman',serif;font-weight:700;color:#f3f0e8}
 .xy-dim{color:var(--muted)!important}.xy-num{font-family:Georgia,serif;font-size:30px;font-weight:700;color:var(--gold2);line-height:1.05}
@@ -393,8 +398,14 @@ async def guild_page(request: Request, gid: str):
         if gid not in s['managed'] or gid not in bg: raise PermissionError('You cannot manage that kingdom, or Xypher is not in it.')
         chans, roles = await asyncio.gather(get_channels(gid), get_roles(gid))
     except Exception as e:
+        print(f'[XYPHER DASHBOARD] Could not open guild {gid}: {type(e).__name__}: {e}', flush=True)
         await hide(ld); shell(s, {})
-        with ui.page_container(), ui.card().classes('xy-card q-ma-lg'): ui.label(f'⚠️ {e}')
+        with ui.page_container():
+            with ui.column().classes('w-full max-w-4xl mx-auto q-pa-lg'):
+                with ui.card().classes('xy-card w-full'):
+                    ui.label('⚠️ Could not open this server').classes('xy-h text-xl')
+                    ui.label(str(e)).classes('xy-dim')
+                    ui.button('Back to kingdoms', icon='arrow_back', on_click=lambda: ui.navigate.to('/')).props('unelevated no-caps color=primary')
         return
     st = db.get_settings(gid)
     tickets = [dict(r) for r in db.many('SELECT id,num,user,category,subject,priority,status,claimed_by,created,closed,closed_by,rating FROM tickets WHERE guild=? ORDER BY id DESC', (gid,))]
@@ -414,13 +425,19 @@ async def guild_page(request: Request, gid: str):
         db.set_settings(gid, patch); ui.notify(msg, type='positive')
 
     with ui.page_container():
-        with ui.column().classes('w-full max-w-7xl mx-auto q-pa-lg gap-4'):
+        with ui.column().classes('w-full max-w-7xl mx-auto q-pa-lg gap-4').style('min-height:calc(100vh - 72px);width:100%;box-sizing:border-box'):
             with ui.row().classes('items-center justify-between w-full'):
                 with ui.column().classes('gap-1'):
                     ui.label('KINGDOM CONTROL ROOM').classes('xy-hero-kicker')
                     ui.label(gname).classes('xy-page-title')
                     ui.label('Manage the realm systems and review recent activity.').classes('xy-page-sub')
                 ui.button('All kingdoms', icon='arrow_back', on_click=lambda: ui.navigate.to('/')).props('flat no-caps color=grey-5')
+            with ui.card().classes('xy-card w-full'):
+                with ui.row().classes('items-center justify-between w-full'):
+                    with ui.column().classes('gap-1'):
+                        ui.label('SERVER SETTINGS').classes('xy-hero-kicker')
+                        ui.label('Choose a section below to configure this server.').classes('xy-page-sub')
+                    ui.label('⚔  COMMAND ACTIVE').classes('xy-pill')
             with ui.tabs().props('align=left inline-label mobile-arrows').classes('w-full') as tabs:
                 t_over = ui.tab('Overview', icon='castle')
                 t_wel = ui.tab('Welcome', icon='waving_hand')
